@@ -1,0 +1,79 @@
+name: Build PLIS Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**.zip'
+      - '.github/workflows/build-plis-android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract PLIS project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP_FILE=$(find . -type f -iname '*plis*.zip' -not -path './.git/*' -print | head -n 1 || true)
+          if [ -z "$ZIP_FILE" ]; then
+            ZIP_FILE=$(find . -type f -iname '*.zip' -not -path './.git/*' -print | head -n 1 || true)
+          fi
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Tidak menemukan file ZIP di repository. Pastikan ZIP sudah di-commit ke repository, bukan hanya dipilih di perangkat."
+            exit 1
+          fi
+          echo "ZIP ditemukan: $ZIP_FILE"
+          mkdir -p extracted
+          unzip -q "$ZIP_FILE" -d extracted
+          PACKAGE_FILE=$(find extracted -type f -name package.json -print | head -n 1 || true)
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json tidak ditemukan di dalam ZIP."
+            find extracted -maxdepth 4 -type f | head -n 80
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+          echo "Proyek ditemukan di: $PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies and build web app
+        run: |
+          cd "$PROJECT_DIR"
+          npm install
+          npm run build
+
+      - name: Install Capacitor Android platform
+        run: |
+          cd "$PROJECT_DIR"
+          npx cap add android
+          npx cap sync android
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build debug APK
+        run: |
+          cd "$PROJECT_DIR/android"
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PLIS-Android-debug-APK
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
